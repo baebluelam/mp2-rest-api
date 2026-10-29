@@ -6,7 +6,15 @@ from pathlib import Path
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 
-from src import DatasetInfo, DatasetStorage, HealthResponse, setup_logging
+from src import (
+    DatasetInfo,
+    DatasetStorage,
+    HealthResponse,
+    ProcessConfig,
+    ProcessingReport,
+    log_requests,
+    setup_logging,
+)
 
 
 setup_logging(verbose=True)
@@ -16,6 +24,7 @@ app = FastAPI(
     title="Data Processing API",
     version="1.0.0"
 )
+app.middleware("http")(log_requests)
 
 storage = DatasetStorage()
 
