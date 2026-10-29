@@ -16,6 +16,11 @@ from src import (
     setup_logging,
 )
 
+from data_pipeline import (
+    create_cleaning_report,
+    process_data,
+    validate_dataframe,
+)
 
 setup_logging(verbose=True)
 logger = logging.getLogger(__name__)
@@ -125,4 +130,89 @@ def get_dataset(
         "id": dataset_id,
         "data": records,
         "total_rows": len(dataframe)
+    }
+
+@app.post(
+    "/datasets/{dataset_id}/process",
+    response_model=ProcessingReport,
+)
+def process_dataset(dataset_id: int, config: ProcessConfig):
+    """Validate and process a stored dataset using MP1 functions."""
+
+    dataframe = storage.get(dataset_id)
+
+    if dataframe is None:
+        logger.warning("Dataset not found: %s", dataset_id)
+        raise HTTPException(
+            status_code=404,
+            detail="Dataset not found",
+        )
+
+    config_dict = config.model_dump()
+    validation_config = config_dict["validation"]
+    numeric_columns = validation_config["numeric_columns"]
+
+    missing_numeric_columns = [
+        column
+        for column in numeric_columns
+        if column not in dataframe.columns
+    ]
+
+    if missing_numeric_columns:
+        missing_names = ", ".join(missing_numeric_columns)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Numeric column not found: {missing_names}",
+        )
+
+    try:
+        validated_dataframe = validate_dataframe(
+            dataframe,
+            validation_config["required_columns"],
+            numeric_columns,
+        )
+
+        validation_rows_removed = (
+            len(dataframe) - len(validated_dataframe)
+        )
+
+        validated_before_processing = validated_dataframe.copy()
+
+        processed_dataframe = process_data(
+            validated_dataframe,
+            config_dict,
+        )
+
+        cleaning_report = create_cleaning_report(
+            validated_before_processing,
+            processed_dataframe,
+        )
+
+    except ValueError as error:
+        logger.warning(
+            "Processing failed for dataset %s: %s",
+            dataset_id,
+            error,
+        )
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        ) from error
+
+    storage.update(dataset_id, processed_dataframe)
+
+    logger.info(
+        "Processed dataset: id=%s, validation_removed=%s, "
+        "rows_before=%s, rows_after=%s",
+        dataset_id,
+        validation_rows_removed,
+        cleaning_report["rows_before"],
+        cleaning_report["rows_after"],
+    )
+
+    return {
+        "id": dataset_id,
+        "validation_rows_removed": validation_rows_removed,
+        "cleaning_report": cleaning_report,
     }
